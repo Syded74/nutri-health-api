@@ -1,10 +1,27 @@
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
 .Python
-venv/
 env/
-.vscode/
-.DS_Store
-*.log
+venv/
+.venv
 .env
-instance/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Don't ignore model files - they're needed for deployment!
+# model/
+# !model/*.pkl

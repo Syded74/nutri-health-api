@@ -1,0 +1,7 @@
+[build]
+nixPackages = ["python3", "gcc", "g++", "cmake", "pkg-config"]
+
+[deploy]
+startCommand = "gunicorn app:app --bind 0.0.0.0:$PORT --timeout 120 --workers 1"
+healthcheckPath = "/health"
+restartPolicyType = "ON_FAILURE"

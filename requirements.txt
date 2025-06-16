@@ -1,8 +1,14 @@
-flask==2.3.3
-flask-cors==4.0.0
-scikit-learn==1.3.0
-xgboost==1.7.6
-pandas==2.0.3
-numpy==1.24.3
-shap==0.42.1
+# Fixed requirements.txt for Railway deployment
+# Using versions with pre-compiled wheels to avoid compilation timeouts
+
+flask==3.0.0
+flask-cors==4.0.1
+scikit-learn==1.4.0
+xgboost==2.0.3
+pandas==2.2.0
+numpy==1.26.3
 joblib==1.3.2
+gunicorn==21.2.0
+
+# Note: Removed shap temporarily as it can cause build issues
+# Add back if needed: shap==0.44.0

@@ -22,6 +22,15 @@ scaler = None
 feature_names = None
 label_mapping = None
 
+# Default feature names (fallback if loading fails)
+DEFAULT_FEATURE_NAMES = [
+    'caloric_value', 'fat', 'saturated_fat', 'sugars', 'sodium',
+    'protein', 'vitamin_a', 'vitamin_c', 'iron', 'calcium'
+]
+
+# Default label mapping (fallback if loading fails)
+DEFAULT_LABEL_MAPPING = {0: 'Healthy', 1: 'Moderate', 2: 'Unhealthy'}
+
 # Nutrition reference values and defaults
 NUTRITION_DEFAULTS = {
     "caloric_value": {
@@ -70,22 +79,80 @@ def load_model_components():
     """Load all model components at startup"""
     global model, scaler, feature_names, label_mapping
     
+    # Initialize with defaults first
+    feature_names = DEFAULT_FEATURE_NAMES.copy()
+    label_mapping = DEFAULT_LABEL_MAPPING.copy()
+    
     try:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         model_path = os.path.join(script_dir, 'model')
         
+        logger.info(f"Looking for model files in: {model_path}")
+        
         if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model directory not found at: {model_path}")
+            logger.error(f"Model directory not found at: {model_path}")
+            logger.warning("Using default feature names and label mapping")
+            return False
         
-        model = joblib.load(os.path.join(model_path, 'nutrisafe_model.pkl'))
-        scaler = joblib.load(os.path.join(model_path, 'scaler.pkl'))
-        feature_names = joblib.load(os.path.join(model_path, 'feature_names.pkl'))
-        label_mapping = joblib.load(os.path.join(model_path, 'label_mapping.pkl'))
+        # List files in model directory
+        files = os.listdir(model_path)
+        logger.info(f"Files in model directory: {files}")
         
-        logger.info("✅ All model components loaded successfully!")
+        # Load model components
+        model_file = os.path.join(model_path, 'nutrisafe_model.pkl')
+        scaler_file = os.path.join(model_path, 'scaler.pkl')
+        features_file = os.path.join(model_path, 'feature_names.pkl')
+        labels_file = os.path.join(model_path, 'label_mapping.pkl')
+        
+        # Check if files exist
+        missing_files = []
+        for file_path, name in [(model_file, 'model'), (scaler_file, 'scaler'), 
+                               (features_file, 'features'), (labels_file, 'labels')]:
+            if not os.path.exists(file_path):
+                missing_files.append(name)
+        
+        if missing_files:
+            logger.error(f"Missing model files: {missing_files}")
+            logger.warning("Using default feature names and label mapping")
+            return False
+        
+        # Load components
+        model = joblib.load(model_file)
+        scaler = joblib.load(scaler_file)
+        
+        # Load feature names with fallback
+        try:
+            loaded_features = joblib.load(features_file)
+            if loaded_features is not None and len(loaded_features) > 0:
+                feature_names = loaded_features
+            else:
+                logger.warning("Loaded feature_names is None or empty, using defaults")
+        except Exception as e:
+            logger.warning(f"Could not load feature names: {e}, using defaults")
+        
+        # Load label mapping with fallback
+        try:
+            loaded_labels = joblib.load(labels_file)
+            if loaded_labels is not None and len(loaded_labels) > 0:
+                label_mapping = loaded_labels
+            else:
+                logger.warning("Loaded label_mapping is None or empty, using defaults")
+        except Exception as e:
+            logger.warning(f"Could not load label mapping: {e}, using defaults")
+        
+        logger.info(f"✅ Model components loaded successfully!")
+        logger.info(f"Feature names: {feature_names}")
+        logger.info(f"Label mapping: {label_mapping}")
         return True
+        
     except Exception as e:
         logger.error(f"❌ Failed to load model components: {str(e)}")
+        # Ensure defaults are set
+        if feature_names is None:
+            feature_names = DEFAULT_FEATURE_NAMES.copy()
+        if label_mapping is None:
+            label_mapping = DEFAULT_LABEL_MAPPING.copy()
+        logger.warning("Using default feature names and label mapping as fallback")
         return False
 
 def impute_missing_values(data, method='smart'):
@@ -99,6 +166,11 @@ def impute_missing_values(data, method='smart'):
     Returns:
         Dictionary with imputed values and metadata
     """
+    # Ensure feature_names is available
+    if feature_names is None:
+        logger.error("feature_names is None in impute_missing_values")
+        raise ValueError("Feature names not available")
+    
     imputed_data = {}
     missing_fields = []
     imputation_info = {}
@@ -273,6 +345,68 @@ def get_nutrition_advice(prediction, probabilities, missing_fields, confidence_a
     
     return advice
 
+def make_fallback_prediction(imputed_data):
+    """
+    Make a simple rule-based prediction when ML model is not available
+    """
+    # Simple heuristic based on nutrition values
+    calories = imputed_data.get('caloric_value', 150)
+    fat = imputed_data.get('fat', 5)
+    saturated_fat = imputed_data.get('saturated_fat', 2)
+    sugars = imputed_data.get('sugars', 8)
+    sodium = imputed_data.get('sodium', 0.3)
+    protein = imputed_data.get('protein', 6)
+    
+    # Calculate a simple score
+    unhealthy_score = 0
+    
+    # High calories
+    if calories > 400:
+        unhealthy_score += 2
+    elif calories > 250:
+        unhealthy_score += 1
+    
+    # High fat
+    if fat > 20:
+        unhealthy_score += 2
+    elif fat > 10:
+        unhealthy_score += 1
+    
+    # High saturated fat
+    if saturated_fat > 5:
+        unhealthy_score += 2
+    elif saturated_fat > 2:
+        unhealthy_score += 1
+    
+    # High sugar
+    if sugars > 20:
+        unhealthy_score += 2
+    elif sugars > 10:
+        unhealthy_score += 1
+    
+    # High sodium
+    if sodium > 1.0:
+        unhealthy_score += 2
+    elif sodium > 0.5:
+        unhealthy_score += 1
+    
+    # Low protein (negative indicator)
+    if protein < 3:
+        unhealthy_score += 1
+    
+    # Determine category
+    if unhealthy_score >= 5:
+        prediction = 2  # Unhealthy
+        probabilities = [0.1, 0.2, 0.7]
+    elif unhealthy_score >= 3:
+        prediction = 1  # Moderate
+        probabilities = [0.2, 0.6, 0.2]
+    else:
+        prediction = 0  # Healthy
+        probabilities = [0.7, 0.2, 0.1]
+    
+    return prediction, np.array(probabilities)
+
 @app.route('/predict', methods=['POST'])
 def predict():
     """Enhanced prediction with missing value handling"""
@@ -282,21 +416,43 @@ def predict():
         if not data:
             return jsonify({"error": "No JSON data provided"}), 400
         
+        logger.info(f"Received prediction request: {data}")
+        
+        # Ensure global variables are initialized
+        global feature_names, label_mapping
+        if feature_names is None:
+            logger.warning("feature_names is None, initializing with defaults")
+            feature_names = DEFAULT_FEATURE_NAMES.copy()
+        if label_mapping is None:
+            logger.warning("label_mapping is None, initializing with defaults")
+            label_mapping = DEFAULT_LABEL_MAPPING.copy()
+        
+        logger.info(f"Using feature_names: {feature_names}")
+        logger.info(f"Using label_mapping: {label_mapping}")
+        
         # Get imputation method from request (default to 'smart')
         imputation_method = data.get('imputation_method', 'smart')
         
         # Handle missing values
         imputed_data, missing_fields, imputation_info = impute_missing_values(data, imputation_method)
         
+        logger.info(f"Imputed data: {imputed_data}")
+        logger.info(f"Missing fields: {missing_fields}")
+        
         # Prepare input array
         input_array = np.array([[imputed_data[feature] for feature in feature_names]])
         
-        # Scale input
-        input_scaled = scaler.transform(input_array)
-        
         # Make prediction
-        prediction = model.predict(input_scaled)[0]
-        probabilities = model.predict_proba(input_scaled)[0]
+        if model is not None and scaler is not None:
+            # Use ML model
+            logger.info("Using ML model for prediction")
+            input_scaled = scaler.transform(input_array)
+            prediction = model.predict(input_scaled)[0]
+            probabilities = model.predict_proba(input_scaled)[0]
+        else:
+            # Use fallback prediction
+            logger.warning("Using fallback prediction method")
+            prediction, probabilities = make_fallback_prediction(imputed_data)
         
         # Adjust confidence based on missing data
         confidence_adjustment = calculate_confidence_adjustment(missing_fields, len(feature_names))
@@ -338,6 +494,8 @@ def predict():
         
     except Exception as e:
         logger.error(f"Prediction error: {str(e)}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({"error": "Prediction failed", "details": str(e)}), 500
 
 @app.route('/imputation-methods', methods=['GET'])
@@ -379,13 +537,15 @@ def home():
     """API home endpoint"""
     return jsonify({
         "message": "🔬 NutriSafe API - Enhanced Nutrition Risk Assessment",
-        "version": "2.0.0",
+        "version": "2.1.1",
         "status": "active",
+        "model_status": "loaded" if model is not None else "fallback_mode",
         "features": [
             "Smart missing value imputation",
             "Confidence adjustment for incomplete data",
             "Multiple imputation strategies",
-            "Data quality reporting"
+            "Data quality reporting",
+            "Fallback prediction when model unavailable"
         ],
         "endpoints": {
             "/": "API information",
@@ -402,18 +562,27 @@ def home():
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
-    model_status = "loaded" if model is not None else "not_loaded"
+    model_status = "loaded" if model is not None else "fallback_mode"
+    scaler_status = "loaded" if scaler is not None else "not_loaded"
+    features_status = "loaded" if feature_names is not None else "using_defaults"
+    
     return jsonify({
         "status": "healthy",
         "model_status": model_status,
+        "scaler_status": scaler_status,
+        "features_status": features_status,
+        "feature_names": feature_names,
+        "label_mapping": label_mapping,
         "timestamp": datetime.now().isoformat()
     })
 
 @app.route('/features', methods=['GET'])
 def get_features():
     """Get required input features with enhanced information"""
+    current_features = feature_names if feature_names is not None else DEFAULT_FEATURE_NAMES
+    
     return jsonify({
-        "required_features": feature_names,
+        "required_features": current_features,
         "feature_descriptions": {k: v["description"] for k, v in NUTRITION_DEFAULTS.items()},
         "missing_value_handling": "Fields can be omitted or set to null/empty - the API will intelligently impute missing values",
         "example_input": {
@@ -432,10 +601,25 @@ def get_features():
     })
 
 if __name__ == '__main__':
-    if not load_model_components():
-        logger.error("Failed to load model components. Exiting...")
-        exit(1)
+    # Initialize with defaults first
+    feature_names = DEFAULT_FEATURE_NAMES.copy()
+    label_mapping = DEFAULT_LABEL_MAPPING.copy()
+    
+    logger.info("Initializing with default values...")
+    logger.info(f"Default feature names: {feature_names}")
+    logger.info(f"Default label mapping: {label_mapping}")
+    
+    # Try to load model components
+    model_loaded = load_model_components()
+    
+    if not model_loaded:
+        logger.warning("⚠️  Model components could not be loaded. API will run in fallback mode.")
+    else:
+        logger.info("🚀 Model loaded successfully!")
     
     logger.info("🚀 Starting Enhanced NutriSafe API...")
-    port = int(os.environ.get("PORT", 5000))
-    app.run(debug=False, host='0.0.0.0', port=port) 
+    logger.info(f"Final feature names: {feature_names}")
+    logger.info(f"Final label mapping: {label_mapping}")
+    
+    port = int(os.environ.get("PORT", 5001))
+    app.run(debug=False, host='0.0.0.0', port=port)
